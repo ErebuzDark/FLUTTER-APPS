@@ -19,4 +19,15 @@ class WeatherService {
       throw Exception('Something went wrong. Try again later.');
     }
   }
+
+  static Future<WeatherData> fetchByLocation(double lat, double lon) async {
+    final uri = Uri.parse('$_base?lat=$lat&lon=$lon&appid=$_apiKey&units=metric');
+    final response = await http.get(uri);
+
+    if (response.statusCode == 200) {
+      return WeatherData.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to load weather for location.');
+    }
+  }
 }

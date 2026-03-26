@@ -28,6 +28,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = "DayWise"  // <-- CHANGE RELEASE APP NAME HERE
     }
 
     buildTypes {
@@ -41,10 +42,12 @@ android {
             )
         }
 
-        // ADD THIS — debug stays clean
         debug {
             isMinifyEnabled = false
             isShrinkResources = false
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "DayWise Dev"
         }
     }
 }

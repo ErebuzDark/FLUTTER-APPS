@@ -56,7 +56,16 @@ class NotificationService {
 
       print('Notification channels created');
 
-      // Step 2 — Request permissions
+    }
+  }
+
+  static Future<void> requestPermissions() async {
+    final AndroidFlutterLocalNotificationsPlugin? androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+
+    if (androidPlugin != null) {
       final bool? notifGranted = await androidPlugin
           .requestNotificationsPermission();
       final bool? alarmGranted = await androidPlugin
@@ -65,11 +74,7 @@ class NotificationService {
       print('Notification permission: $notifGranted');
       print('Exact alarm permission: $alarmGranted');
     }
-
-    // Step 3 — Request battery optimization exemption
-    await requestBatteryOptimizationExemption();
   }
-
   static Future<void> requestBatteryOptimizationExemption() async {
     final status = await Permission.ignoreBatteryOptimizations.status;
     print('Battery optimization status: $status');
