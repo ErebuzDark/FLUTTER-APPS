@@ -8,14 +8,16 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
 
   static Future<void> init() async {
+    // Setup timezones
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Manila'));
 
     const AndroidInitializationSettings androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const InitializationSettings initSettings =
-        InitializationSettings(android: androidSettings);
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+    );
 
     await _plugin.initialize(
       initSettings,
@@ -24,23 +26,53 @@ class NotificationService {
       },
     );
 
-    final AndroidFlutterLocalNotificationsPlugin? androidPlugin =
-        _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    // Get android plugin instance — only once
+    final AndroidFlutterLocalNotificationsPlugin? androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
 
     if (androidPlugin != null) {
-      final bool? notifGranted =
-          await androidPlugin.requestNotificationsPermission();
-      final bool? alarmGranted =
-          await androidPlugin.requestExactAlarmsPermission();
+      // Step 1 — Create notification channels first
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'event_channel_v3',
+          'Calendar Events',
+          description: 'Notifications for calendar events',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+        ),
+      );
+
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'weather_channel_v2',
+          'Weather Updates',
+          description: 'Periodic weather updates',
+          importance: Importance.defaultImportance,
+        ),
+      );
+
+      print('Notification channels created');
+
+      // Step 2 — Request permissions
+      final bool? notifGranted = await androidPlugin
+          .requestNotificationsPermission();
+      final bool? alarmGranted = await androidPlugin
+          .requestExactAlarmsPermission();
+
       print('Notification permission: $notifGranted');
       print('Exact alarm permission: $alarmGranted');
     }
+
+    // Step 3 — Request battery optimization exemption
+    await requestBatteryOptimizationExemption();
   }
 
   static Future<void> requestBatteryOptimizationExemption() async {
     final status = await Permission.ignoreBatteryOptimizations.status;
-    print('Battery optimization exemption: $status');
+    print('Battery optimization status: $status');
     if (!status.isGranted) {
       final result = await Permission.ignoreBatteryOptimizations.request();
       print('Battery optimization result: $result');
@@ -56,10 +88,12 @@ class NotificationService {
     await _plugin.cancel(id);
 
     final tz.TZDateTime now = tz.TZDateTime.now(tz.local);
-    final tz.TZDateTime tzScheduled =
-        tz.TZDateTime.from(scheduledDate, tz.local);
+    final tz.TZDateTime tzScheduled = tz.TZDateTime.from(
+      scheduledDate,
+      tz.local,
+    );
 
-    print('Now: $now');
+    print('Now:       $now');
     print('Scheduled: $tzScheduled');
     print('Seconds until fire: ${tzScheduled.difference(now).inSeconds}');
 
@@ -77,12 +111,11 @@ class NotificationService {
         android: AndroidNotificationDetails(
           'event_channel_v3',
           'Calendar Events',
-          channelDescription: 'Notifications for calendar events',
           importance: Importance.max,
           priority: Priority.max,
           playSound: true,
           enableVibration: true,
-          fullScreenIntent: true,
+          // Removed fullScreenIntent: true because it requires user approval on Android 14+ when installed via APK
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -114,8 +147,8 @@ class NotificationService {
   }
 
   static Future<void> checkPendingNotifications() async {
-    final List<PendingNotificationRequest> pending =
-        await _plugin.pendingNotificationRequests();
+    final List<PendingNotificationRequest> pending = await _plugin
+        .pendingNotificationRequests();
     print('Pending notifications: ${pending.length}');
     for (var n in pending) {
       print('  - ID: ${n.id}, Title: ${n.title}, Body: ${n.body}');

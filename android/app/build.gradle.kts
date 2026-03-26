@@ -33,6 +33,18 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+
+        // ADD THIS — debug stays clean
+        debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

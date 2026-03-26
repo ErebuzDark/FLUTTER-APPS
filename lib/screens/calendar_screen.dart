@@ -41,7 +41,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           builder: (context, setSheetState) {
             return Container(
               padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 80,
                 top: 24,
                 left: 24,
                 right: 24,
@@ -167,27 +167,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           value: notifyMe,
                           onChanged: (val) =>
                               setSheetState(() => notifyMe = val),
-                          activeColor: const Color(0xFF4A90D9),
+                          activeThumbColor: const Color(0xFF4A90D9),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 24),
-
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        await NotificationService.showWeatherNotification(
-                          city: 'Test',
-                          temperature: '32',
-                          description: 'Testing notifications!',
-                        );
-                      },
-                      child: const Text('Test Notification'),
-                    ),
-                  ),
-
+                  
                   // Save button
                   SizedBox(
                     width: double.infinity,
@@ -383,19 +369,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 todayTextStyle: const TextStyle(color: Colors.white),
                 selectedTextStyle: const TextStyle(color: Colors.white),
               ),
-              headerStyle: HeaderStyle(
+              headerStyle: const HeaderStyle(
                 formatButtonVisible: false,
                 titleCentered: true,
-                titleTextStyle: const TextStyle(
+                titleTextStyle: TextStyle(
                   color: Colors.white,
                   fontSize: 17,
                   fontWeight: FontWeight.w600,
                 ),
-                leftChevronIcon: const Icon(
+                leftChevronIcon: Icon(
                   Icons.chevron_left,
                   color: Colors.white,
                 ),
-                rightChevronIcon: const Icon(
+                rightChevronIcon: Icon(
                   Icons.chevron_right,
                   color: Colors.white,
                 ),
