@@ -2,6 +2,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'package:intl/intl.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -50,6 +51,15 @@ class NotificationService {
           'weather_channel_v2',
           'Weather Updates',
           description: 'Periodic weather updates',
+          importance: Importance.defaultImportance,
+        ),
+      );
+
+      await androidPlugin.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'expense_channel',
+          'Expense Reminders',
+          description: 'Monthly reminders for tracking expenses',
           importance: Importance.defaultImportance,
         ),
       );
@@ -168,5 +178,47 @@ class NotificationService {
   static Future<void> cancelAll() async {
     await _plugin.cancelAll();
     print('All notifications cancelled');
+  }
+
+  static Future<void> scheduleMonthlyExpenseReminders() async {
+    final tz.TZDateTime now = tz.TZDateTime.now(tz.local);
+    final DateFormat formatter = DateFormat('MMMM');
+    
+    // We schedule notifications for the 1st day of the next 12 months
+    for (int i = 0; i < 12; i++) {
+      int targetMonth = now.month + i;
+      int targetYear = now.year;
+      if (targetMonth > 12) {
+        targetMonth -= 12;
+        targetYear++;
+      }
+      
+      tz.TZDateTime scheduledDate = tz.TZDateTime(tz.local, targetYear, targetMonth, 1, 9, 0); // 9:00 AM on the 1st
+      
+      // If the 1st of this month has already passed, skip the current month
+      if (scheduledDate.isBefore(now)) {
+        continue;
+      }
+
+      final String monthName = formatter.format(scheduledDate);
+      
+      await _plugin.zonedSchedule(
+        1000 + targetMonth, // Unique ID per month so they easily overwrite
+        'Expense Planner',
+        'It\'s $monthName, ready to plot your expenses now?',
+        scheduledDate,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'expense_channel',
+            'Expense Reminders',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    }
+    print('Scheduled rolling 12-month expense reminders.');
   }
 }

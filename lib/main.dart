@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'models/calendar_event.dart';
 import 'models/expense.dart';
 import 'models/budget.dart';
+import 'models/deduction.dart';
 import 'services/notification_service.dart';
 import 'services/background_weather_service.dart';
 import 'screens/weather_screen.dart';
@@ -20,12 +21,15 @@ void main() async {
   Hive.registerAdapter(CalendarEventAdapter());
   Hive.registerAdapter(ExpenseAdapter());
   Hive.registerAdapter(BudgetAdapter());
+  Hive.registerAdapter(DeductionAdapter());
   await Hive.openBox<CalendarEvent>('events');
   await Hive.openBox<Expense>('expenses');
   await Hive.openBox<Budget>('budget');
+  await Hive.openBox<Deduction>('deductions');
 
   // Setup notifications
   await NotificationService.init();
+  await NotificationService.scheduleMonthlyExpenseReminders();
 
   // Initialize Android Alarm Manager
   await AndroidAlarmManager.initialize();

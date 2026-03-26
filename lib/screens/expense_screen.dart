@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import '../models/expense.dart';
 import '../models/budget.dart';
+import '../models/deduction.dart';
 
 class ExpenseScreen extends StatefulWidget {
   const ExpenseScreen({super.key});
@@ -14,15 +16,18 @@ class ExpenseScreen extends StatefulWidget {
 class _ExpenseScreenState extends State<ExpenseScreen> {
   late Box<Expense> _expenseBox;
   late Box<Budget> _budgetBox;
+  late Box<Deduction> _deductionBox;
+
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
 
   final List<String> _categories = [
-    'Food 🍔',
-    'Transport 🚌',
-    'Shopping 🛍️',
-    'Bills 💡',
-    'Health 🏥',
-    'Entertainment 🎮',
-    'Other 💼',
+    'Food',
+    'Transport',
+    'Shopping',
+    'Bills',
+    'Health',
+    'Entertainment',
+    'Other',
   ];
 
   @override
@@ -30,87 +35,154 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     super.initState();
     _expenseBox = Hive.box<Expense>('expenses');
     _budgetBox = Hive.box<Budget>('budget');
+    _deductionBox = Hive.box<Deduction>('deductions');
+    _ensureMonthDataExists();
   }
 
-  double get _budget {
-    if (_budgetBox.isEmpty) return 0;
-    return _budgetBox.getAt(0)!.amount;
+  String get _monthKey => DateFormat('yyyy-MM').format(_selectedMonth);
+
+  void _ensureMonthDataExists() {
+    // If no budget for this month, copy from previous month if it exists
+    final hasBudget = _budgetBox.values.any((b) => b.monthKey == _monthKey);
+    final hasDeductions = _deductionBox.values.any((d) => d.monthKey == _monthKey);
+
+    if (!hasBudget && !hasDeductions) {
+      final prevDate = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+      final prevKey = DateFormat('yyyy-MM').format(prevDate);
+      
+      final prevBudget = _budgetBox.values.where((b) => b.monthKey == prevKey);
+      if (prevBudget.isNotEmpty) {
+        _budgetBox.add(Budget(amount: prevBudget.first.amount, label: 'Base Salary', monthKey: _monthKey));
+      }
+
+      final prevDeds = _deductionBox.values.where((d) => d.monthKey == prevKey);
+      for (final d in prevDeds) {
+        _deductionBox.add(Deduction(id: DateTime.now().toString(), title: d.title, amount: d.amount, monthKey: _monthKey));
+      }
+    }
+  }
+
+  // --- Data Getters ---
+
+  Budget? get _currentBudget {
+    try {
+      return _budgetBox.values.firstWhere((b) => b.monthKey == _monthKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  double get _baseSalary => _currentBudget?.amount ?? 0;
+
+  List<Deduction> get _currentDeductions {
+    return _deductionBox.values.where((d) => d.monthKey == _monthKey).toList();
+  }
+
+  double get _totalDeductions {
+    return _currentDeductions.fold(0.0, (sum, d) => sum + d.amount);
+  }
+
+  double get _netBudget => _baseSalary - _totalDeductions;
+
+  List<Expense> get _currentMonthExpenses {
+    return _expenseBox.values.where((e) {
+      return e.date.year == _selectedMonth.year && e.date.month == _selectedMonth.month;
+    }).toList()..sort((a, b) => b.date.compareTo(a.date));
   }
 
   double get _totalExpenses {
-    return _expenseBox.values.fold(0.0, (sum, e) => sum + e.amount);
+    return _currentMonthExpenses.fold(0.0, (sum, e) => sum + e.amount);
   }
 
-  double get _remaining => _budget - _totalExpenses;
+  double get _remaining => _netBudget - _totalExpenses;
 
-  void _showSetBudgetDialog() {
-    final ctrl = TextEditingController(
-      text: _budget > 0 ? _budget.toStringAsFixed(2) : '',
-    );
+  // --- Month Navigation ---
+  void _changeMonth(int offset) {
+    setState(() {
+      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + offset, 1);
+      _ensureMonthDataExists();
+    });
+  }
+
+  void _showMonthYearPicker() {
+    int tempYear = _selectedMonth.year;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeBg = isDark ? Colors.white : Colors.black87;
+    final activeText = isDark ? Colors.black : Colors.white;
+    final defaultText = isDark ? Colors.white : Colors.black87;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E2A3A),
-        title: const Text(
-          'Set Budget / Salary',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'e.g. 25000',
-            hintStyle: TextStyle(color: Colors.white38),
-            prefixText: '₱ ',
-            prefixStyle: TextStyle(color: Colors.white70),
-            enabledBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Colors.white30),
-            ),
-            focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFF4A90D9)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => setDialogState(() => tempYear--)),
+              Text(tempYear.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => setDialogState(() => tempYear++)),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: GridView.builder(
+              shrinkWrap: true,
+              itemCount: 12,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 1.5,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+              ),
+              itemBuilder: (context, index) {
+                final monthNum = index + 1;
+                final monthName = DateFormat('MMM').format(DateTime(tempYear, monthNum));
+                final isSelected = _selectedMonth.year == tempYear && _selectedMonth.month == monthNum;
+                
+                return InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () {
+                    setState(() {
+                      _selectedMonth = DateTime(tempYear, monthNum, 1);
+                      _ensureMonthDataExists();
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: isSelected ? activeBg : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      monthName,
+                      style: TextStyle(
+                        color: isSelected ? activeText : defaultText,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4A90D9),
-            ),
-            onPressed: () {
-              final val = double.tryParse(ctrl.text.trim());
-              if (val != null && val > 0) {
-                if (_budgetBox.isEmpty) {
-                  _budgetBox.add(Budget(amount: val, label: 'Budget'));
-                } else {
-                  final b = _budgetBox.getAt(0)!;
-                  b.amount = val;
-                  b.save();
-                }
-                setState(() {});
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }
 
-  void _showAddExpenseSheet() {
-    final titleCtrl = TextEditingController();
-    final amountCtrl = TextEditingController();
-    String selectedCategory = _categories.first;
-    DateTime selectedDate = DateTime.now();
+  // --- Income & Deductions Manager ---
+  void _showIncomeDeductionManager() {
+    final salaryCtrl = TextEditingController(
+      text: _baseSalary > 0 ? _baseSalary.toString() : '',
+    );
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final textColor = isDark ? Colors.white : Colors.black87;
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E2A3A),
+      backgroundColor: bgColor,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -118,10 +190,8 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => Padding(
           padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 24,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 80,
+            left: 20, right: 20, top: 24,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 40,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -129,54 +199,214 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
             children: [
               Center(
                 child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2)),
                 ),
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Add Expense',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+              Text('Income & Deductions', style: TextStyle(color: textColor, fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              
+              // Base Salary
+              const Text('Base Salary / Budget', style: TextStyle(fontSize: 13, color: Colors.grey)),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: salaryCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      style: TextStyle(color: textColor, fontSize: 18),
+                      decoration: InputDecoration(
+                        prefixText: '₱ ',
+                        prefixStyle: const TextStyle(color: Colors.grey, fontSize: 18),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: () {
+                      final val = double.tryParse(salaryCtrl.text.trim());
+                      if (val != null && val >= 0) {
+                        final b = _currentBudget;
+                        if (b == null) {
+                          _budgetBox.add(Budget(amount: val, label: 'Base Salary', monthKey: _monthKey));
+                        } else {
+                          b.amount = val;
+                          b.save();
+                        }
+                        setState(() {});
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black87,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    ),
+                    child: const Text('Update', style: TextStyle(color: Colors.white)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              
+              // Fixed Deductions
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Fixed Monthly Deductions', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle, color: Colors.black87),
+                    onPressed: () => _showAddEditDeductionDialog(setSheetState),
+                  )
+                ],
+              ),
+              if (_currentDeductions.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Center(child: Text('No fixed deductions added yet.', style: TextStyle(color: Colors.grey))),
+                )
+              else
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _currentDeductions.length,
+                  itemBuilder: (context, i) {
+                    final d = _currentDeductions[i];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(d.title, style: TextStyle(color: textColor, fontWeight: FontWeight.normal)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('-₱${NumberFormat('#,##0.00').format(d.amount)}', style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, color: Colors.grey, size: 20),
+                            onPressed: () => _showAddEditDeductionDialog(setSheetState, d),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.grey, size: 20),
+                            onPressed: () {
+                              d.delete();
+                              setSheetState(() {});
+                              setState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showAddEditDeductionDialog(StateSetter setSheetState, [Deduction? deduction]) {
+    final titleCtrl = TextEditingController(text: deduction?.title ?? '');
+    final amtCtrl = TextEditingController(
+      text: deduction != null ? deduction.amount.toString() : '',
+    );
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(deduction == null ? 'Add Deduction' : 'Edit Deduction'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: 'Title (e.g. SSS)')),
+            TextField(controller: amtCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount (₱)')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(amtCtrl.text.trim());
+              final t = titleCtrl.text.trim();
+              if (val != null && val > 0 && t.isNotEmpty) {
+                if (deduction == null) {
+                  _deductionBox.add(Deduction(id: DateTime.now().toString(), title: t, amount: val, monthKey: _monthKey));
+                } else {
+                  deduction.title = t;
+                  deduction.amount = val;
+                  deduction.save();
+                }
+                setSheetState(() {});
+                setState(() {});
+                Navigator.pop(ctx);
+              }
+            },
+            child: Text(deduction == null ? 'Add' : 'Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- Add Expense ---
+  void _showAddExpenseSheet() {
+    final titleCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    String selectedCategory = _categories.first;
+    DateTime selectedDate = DateTime.now();
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final textColor = isDark ? Colors.white : Colors.black87;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: bgColor,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20, right: 20, top: 24,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 40,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2)),
                 ),
               ),
+              const SizedBox(height: 20),
+              Text('Record Expense', style: TextStyle(color: textColor, fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               TextField(
                 controller: titleCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDecoration('Title (e.g. Lunch)'),
+                style: TextStyle(color: textColor),
+                decoration: _inputDecoration('Title (e.g. Lunch)', textColor),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDecoration('Amount').copyWith(
-                  prefixText: '₱ ',
-                  prefixStyle: const TextStyle(color: Colors.white70),
-                ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: TextStyle(color: textColor),
+                decoration: _inputDecoration('Amount', textColor).copyWith(prefixText: '₱ ', prefixStyle: const TextStyle(color: Colors.grey)),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: selectedCategory,
-                dropdownColor: const Color(0xFF1E2A3A),
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDecoration('Category'),
-                items: _categories
-                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                    .toList(),
+                dropdownColor: bgColor,
+                style: TextStyle(color: textColor),
+                decoration: _inputDecoration('Category', textColor),
+                items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                 onChanged: (v) => setSheetState(() => selectedCategory = v!),
               ),
               const SizedBox(height: 12),
-              // Date picker row
               InkWell(
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -185,65 +415,47 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
                     firstDate: DateTime(2020),
                     lastDate: DateTime.now(),
                   );
-                  if (picked != null)
-                    setSheetState(() => selectedDate = picked);
+                  if (picked != null) setSheetState(() => selectedDate = picked);
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 14,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                   decoration: BoxDecoration(
-                    border: Border(bottom: BorderSide(color: Colors.white30)),
+                    border: Border(bottom: BorderSide(color: Colors.grey.withOpacity(0.3))),
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.calendar_today,
-                        color: Colors.white54,
-                        size: 18,
-                      ),
+                      const Icon(Icons.calendar_today, color: Colors.grey, size: 18),
                       const SizedBox(width: 10),
-                      Text(
-                        DateFormat('MMM dd, yyyy').format(selectedDate),
-                        style: const TextStyle(color: Colors.white70),
-                      ),
+                      Text(DateFormat('MMM dd, yyyy').format(selectedDate), style: TextStyle(color: textColor)),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4A90D9),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    backgroundColor: Colors.black87,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: () {
                     final title = titleCtrl.text.trim();
                     final amount = double.tryParse(amountCtrl.text.trim());
                     if (title.isEmpty || amount == null || amount <= 0) return;
 
-                    _expenseBox.add(
-                      Expense(
-                        id: DateTime.now().millisecondsSinceEpoch.toString(),
-                        title: title,
-                        amount: amount,
-                        category: selectedCategory,
-                        date: selectedDate,
-                      ),
-                    );
+                    _expenseBox.add(Expense(
+                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                      title: title,
+                      amount: amount,
+                      category: selectedCategory,
+                      date: selectedDate,
+                    ));
                     setState(() {});
                     Navigator.pop(ctx);
                   },
-                  child: const Text(
-                    'Add Expense',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('Add Expense', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
               ),
             ],
@@ -253,299 +465,203 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     );
   }
 
-  InputDecoration _inputDecoration(String hint) => InputDecoration(
+  InputDecoration _inputDecoration(String hint, Color textColor) => InputDecoration(
     hintText: hint,
-    hintStyle: const TextStyle(color: Colors.white38),
-    enabledBorder: const UnderlineInputBorder(
-      borderSide: BorderSide(color: Colors.white30),
-    ),
-    focusedBorder: const UnderlineInputBorder(
-      borderSide: BorderSide(color: Color(0xFF4A90D9)),
-    ),
+    hintStyle: const TextStyle(color: Colors.grey),
+    enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey.withOpacity(0.3))),
+    focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.black87)),
   );
 
   @override
   Widget build(BuildContext context) {
-    final expenses = _expenseBox.values.toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    final expenses = _currentMonthExpenses;
     final fmt = NumberFormat('#,##0.00');
 
-    Color remainingColor = _remaining >= 0
-        ? const Color(0xFF4CAF50)
-        : const Color(0xFFE53935);
+    // Minimalist Colors
+    const Color bg = Color(0xFFF7F8FA);
+    const Color textPrimary = Color(0xFF1E1E1E);
+    const Color textSecondary = Color(0xFF757575);
+    const Color cardBg = Colors.white;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D1B2A),
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 200,
-            pinned: true,
-            backgroundColor: const Color(0xFF1E3A5F),
-            flexibleSpace: FlexibleSpaceBar(
-              titlePadding: const EdgeInsets.only(left: 16, bottom: 12),
-              title: const Text(
-                'Expenses',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF1E3A5F), Color(0xFF0D1B2A)],
+      backgroundColor: bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Month Navigator Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left, color: textPrimary, size: 28),
+                    onPressed: () => _changeMonth(-1),
                   ),
-                ),
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 48),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _SummaryCard(
-                                label: 'Budget',
-                                value: '₱${fmt.format(_budget)}',
-                                icon: Icons.account_balance_wallet,
-                                color: const Color(0xFF4A90D9),
-                                onTap: _showSetBudgetDialog,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _SummaryCard(
-                                label: 'Spent',
-                                value: '₱${fmt.format(_totalExpenses)}',
-                                icon: Icons.receipt_long,
-                                color: const Color(0xFFF57C00),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
+                  InkWell(
+                    onTap: _showMonthYearPicker,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            DateFormat('MMMM yyyy').format(_selectedMonth),
+                            style: const TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w600),
                           ),
-                          decoration: BoxDecoration(
-                            color: remainingColor.withAlpha(30),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: remainingColor.withAlpha(80),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _remaining >= 0
-                                    ? 'Remaining Balance'
-                                    : 'Over Budget!',
-                                style: TextStyle(
-                                  color: remainingColor,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              Text(
-                                '₱${fmt.format(_remaining.abs())}',
-                                style: TextStyle(
-                                  color: remainingColor,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                          const SizedBox(width: 6),
+                          const Icon(Icons.arrow_drop_down, color: textPrimary),
+                        ],
+                      ),
                     ),
                   ),
-                ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right, color: textPrimary, size: 28),
+                    onPressed: () => _changeMonth(1),
+                  ),
+                ],
               ),
             ),
-          ),
-          if (expenses.isEmpty)
-            const SliverFillRemaining(
-              child: Center(
+            
+            // Minimalist Budget Summary Card
+            GestureDetector(
+              onTap: _showIncomeDeductionManager,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: textPrimary,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4)),
+                  ],
+                ),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.receipt_outlined,
-                      size: 64,
-                      color: Colors.white24,
-                    ),
-                    SizedBox(height: 12),
+                    const Text('REMAINING BUDGET', style: TextStyle(color: Colors.white60, fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
                     Text(
-                      'No expenses yet',
-                      style: TextStyle(color: Colors.white38, fontSize: 16),
+                      '₱${fmt.format(_remaining)}',
+                      style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w700),
                     ),
-                    Text(
-                      'Tap + to add one',
-                      style: TextStyle(color: Colors.white24),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _MinimalStat(label: 'NET INCOME', value: '₱${fmt.format(_netBudget)}'),
+                        Container(width: 1, height: 30, color: Colors.white24),
+                        _MinimalStat(label: 'SPENT', value: '₱${fmt.format(_totalExpenses)}'),
+                      ],
                     ),
                   ],
                 ),
               ),
-            )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate((ctx, i) {
-                  final expense = expenses[i];
-                  return Dismissible(
-                    key: Key(expense.id),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 20),
-                      margin: const EdgeInsets.only(bottom: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withAlpha(50),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(Icons.delete, color: Colors.redAccent),
-                    ),
-                    onDismissed: (_) {
-                      expense.delete();
-                      setState(() {});
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A2B40),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: Row(
+            ),
+            const SizedBox(height: 12),
+            const Text('Tap budget card to edit Salary & Deductions', style: TextStyle(color: textSecondary, fontSize: 11)),
+            const SizedBox(height: 24),
+            
+            // Expense List
+            Expanded(
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: cardBg,
+                  borderRadius: BorderRadius.only(topLeft: Radius.circular(32), topRight: Radius.circular(32)),
+                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -4))],
+                ),
+                child: expenses.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF4A90D9).withAlpha(40),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                expense.category.split(' ').last,
-                                style: const TextStyle(fontSize: 20),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  expense.title,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${expense.category.split(' ').first} • ${DateFormat('MMM dd').format(expense.date)}',
-                                  style: const TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            '-₱${fmt.format(expense.amount)}',
-                            style: const TextStyle(
-                              color: Color(0xFFE57373),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
+                          Icon(Icons.receipt_long, size: 80, color: Colors.grey.withOpacity(0.2)),
+                          const SizedBox(height: 16),
+                          const Text('No expenses this month', style: TextStyle(color: Colors.grey, fontSize: 16)),
                         ],
                       ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.only(top: 24, left: 24, right: 24, bottom: 100),
+                      physics: const BouncingScrollPhysics(),
+                      itemCount: expenses.length,
+                      separatorBuilder: (ctx, i) => Divider(color: Colors.grey.withOpacity(0.1), height: 24),
+                      itemBuilder: (context, i) {
+                        final expense = expenses[i];
+                        return Dismissible(
+                          key: Key(expense.id),
+                          direction: DismissDirection.endToStart,
+                          background: Container(
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.only(right: 20),
+                            child: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          ),
+                          onDismissed: (_) {
+                            expense.delete();
+                            setState(() {});
+                          },
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 48, height: 48,
+                                decoration: BoxDecoration(
+                                  color: bg,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(Icons.attach_money, color: textPrimary),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(expense.title, style: const TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${expense.category} • ${DateFormat('MMM dd').format(expense.date)}',
+                                      style: const TextStyle(color: textSecondary, fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                '-₱${fmt.format(expense.amount)}',
+                                style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                }, childCount: expenses.length),
               ),
             ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddExpenseSheet,
-        backgroundColor: const Color(0xFF4A90D9),
-        icon: const Icon(Icons.add),
-        label: const Text(
-          'Add Expense',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          ],
         ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddExpenseSheet,
+        backgroundColor: textPrimary,
+        elevation: 4,
+        child: const Icon(Icons.add, color: Colors.white, size: 28),
       ),
     );
   }
 }
 
-class _SummaryCard extends StatelessWidget {
+class _MinimalStat extends StatelessWidget {
   final String label;
   final String value;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onTap;
 
-  const _SummaryCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    this.onTap,
-  });
+  const _MinimalStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: color.withAlpha(30),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withAlpha(60)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
-                  ),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (onTap != null)
-              const Icon(Icons.edit, color: Colors.white24, size: 14),
-          ],
-        ),
-      ),
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white60, fontSize: 10, letterSpacing: 1.0, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+      ],
     );
   }
 }

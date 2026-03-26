@@ -1,7 +1,10 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../models/weather_data.dart';
+import '../models/forecast_data.dart';
 import '../services/weather_service.dart';
+import '../services/location_service.dart';
 
 class WeatherScreen extends StatefulWidget {
   const WeatherScreen({super.key});
@@ -16,6 +19,7 @@ class _WeatherScreenState extends State<WeatherScreen>
   final FocusNode _focusNode = FocusNode();
 
   WeatherData? _weather;
+  List<ForecastHour>? _forecast;
   bool _isLoading = false;
   String? _error;
 
@@ -42,6 +46,8 @@ class _WeatherScreenState extends State<WeatherScreen>
     _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    // Auto-fetch weather using device GPS on startup
+    _fetchByLocation();
   }
 
   @override
@@ -51,6 +57,36 @@ class _WeatherScreenState extends State<WeatherScreen>
     _fadeController.dispose();
     _pulseController.dispose();
     super.dispose();
+  }
+
+  Future<void> _fetchByLocation() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    _fadeController.reset();
+    try {
+      final city = await LocationService.getCurrentCity();
+      _controller.text = city;
+      
+      final results = await Future.wait([
+        WeatherService.fetch(city),
+        WeatherService.fetchForecast(city),
+      ]);
+
+      setState(() {
+        _weather = results[0] as WeatherData;
+        _forecast = results[1] as List<ForecastHour>;
+        _isLoading = false;
+      });
+      _fadeController.forward();
+    } catch (e) {
+      // Fail silently — user can still search manually
+      setState(() {
+        _isLoading = false;
+        _forecast = null;
+      });
+    }
   }
 
   Future<void> _search() async {
@@ -65,9 +101,14 @@ class _WeatherScreenState extends State<WeatherScreen>
     _fadeController.reset();
 
     try {
-      final data = await WeatherService.fetch(query);
+      final results = await Future.wait([
+        WeatherService.fetch(query),
+        WeatherService.fetchForecast(query),
+      ]);
+
       setState(() {
-        _weather = data;
+        _weather = results[0] as WeatherData;
+        _forecast = results[1] as List<ForecastHour>;
         _isLoading = false;
       });
       _fadeController.forward();
@@ -75,6 +116,7 @@ class _WeatherScreenState extends State<WeatherScreen>
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
         _weather = null;
+        _forecast = null;
         _isLoading = false;
       });
     }
@@ -152,7 +194,16 @@ class _WeatherScreenState extends State<WeatherScreen>
               if (_weather != null && !_isLoading)
                 FadeTransition(
                   opacity: _fadeAnimation,
-                  child: _buildWeatherCard(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildWeatherCard(),
+                      if (_forecast != null) ...[
+                        const SizedBox(height: 32),
+                        _buildForecastSections(),
+                      ]
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -225,6 +276,19 @@ class _WeatherScreenState extends State<WeatherScreen>
                 ),
               ),
               GestureDetector(
+                onTap: _fetchByLocation,
+                child: Container(
+                  margin: const EdgeInsets.only(left: 4, top: 6, bottom: 6),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.my_location_rounded,
+                      color: Colors.white.withOpacity(0.8), size: 18),
+                ),
+              ),
+              GestureDetector(
                 onTap: _search,
                 child: Container(
                   margin: const EdgeInsets.all(6),
@@ -249,14 +313,15 @@ class _WeatherScreenState extends State<WeatherScreen>
   }
 
   Widget _buildLoader() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.only(top: 60),
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.55,
+      child: Center(
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ScaleTransition(
               scale: _pulseAnimation,
-              child: const Text('🌍', style: TextStyle(fontSize: 56)),
+              child: const Text('🌍', style: TextStyle(fontSize: 64)),
             ),
             const SizedBox(height: 20),
             Text(
@@ -467,6 +532,135 @@ class _WeatherScreenState extends State<WeatherScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildForecastSections() {
+    final daily = WeatherService.groupByDay(_forecast!);
+    final now = DateTime.now();
+    // Grab the next 24 hours of forecast (approx 8 entries since it's every 3h)
+    final hourly = _forecast!.where((h) => h.time.isAfter(now)).take(8).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Today',
+          style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 130,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: hourly.length,
+            itemBuilder: (context, i) {
+              final h = hourly[i];
+              return Container(
+                width: 80,
+                margin: const EdgeInsets.only(right: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      DateFormat('ha').format(h.time), // e.g. 3PM
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.7), fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(_emojiForIcon(h.icon),
+                        style: const TextStyle(fontSize: 28)),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${h.temp.round()}°',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 32),
+        const Text(
+          '5-Day Forecast',
+          style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withOpacity(0.2)),
+          ),
+          child: Column(
+            children: daily.map((d) {
+              bool isToday =
+                  d.date.day == now.day && d.date.month == now.month;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 50,
+                      child: Text(
+                        isToday ? 'Today' : DateFormat('EEE').format(d.date),
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.8),
+                            fontSize: 16,
+                            fontWeight: isToday ? FontWeight.bold : FontWeight.normal),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Text(_emojiForIcon(d.icon),
+                        style: const TextStyle(fontSize: 24)),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Text(
+                        _capitalize(d.description),
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.6),
+                            fontSize: 14),
+                      ),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${d.minTemp.round()}°',
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.6),
+                              fontSize: 16),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          '${d.maxTemp.round()}°',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
     );
   }
 }
